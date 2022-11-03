@@ -6,7 +6,8 @@ import { channels } from './system-channels';
 import { ChannelData } from './types/FDC3Data';
 import { FDC3EventDetail } from './types/FDC3Event';
 
-const DEFAULT_DIRECTORY = 'https://directory.fdc3.finos.org/v2/apps';
+const DEFAULT_DIRECTORY =
+  'https://nkolba.github.io/FDC3-App-Directory/v2/apps/'; //'https://directory.fdc3.finos.org/v2/apps';
 
 const getDirectoryUrl = (): string => {
   const dir = import.meta.env.SAIL_DIRECTORY_URL

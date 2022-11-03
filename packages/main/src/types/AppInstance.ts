@@ -1,5 +1,5 @@
 import { WebContents } from 'electron';
-import { DirectoryApp } from './FDC3Data';
+import { DirectoryApp } from '/@/directory/directory';
 
 /**
  * represents an app instance when resolving intents
