@@ -7,75 +7,22 @@ import {
 } from 'fdc3-1.2';
 import { getRuntime } from '/@/index';
 import { View } from '/@/view';
-import fetch from 'electron-fetch';
 import { RuntimeMessage } from '/@/handlers/runtimeMessage';
 import {
   DirectoryApp,
+  DirectoryIntent,
+  DirectoryAppLaunchDetails,
+  isWeb,
+} from '/@/directory/directory';
+import {
   FDC3App,
   IntentInstance,
   FDC3AppDetail,
 } from '/@/handlers/fdc3/1.2/types/FDC3Data';
-import utils from '/@/utils';
 import { FDC3_1_2_TOPICS } from './topics';
 import { FDC3_2_0_TOPICS } from '/@/handlers/fdc3/2.0/topics';
 import { ipcMain } from 'electron';
 import { RUNTIME_TOPICS } from '/@/handlers/runtime/topics';
-
-/**
- *
- * @param target
- * Given a TargetApp input, return the app Name or undefined
- */
-const resolveTargetAppToName = (target: TargetApp): string | undefined => {
-  if (!target) {
-    return undefined;
-  } else {
-    let name = undefined;
-    //is target typeof string?  if so, it is just going to be an app name
-    if (typeof target === 'string') {
-      name = target;
-    } else {
-      const app: AppMetadata = target as AppMetadata;
-      if (app && app.name) {
-        name = app.name;
-      }
-    }
-    return name;
-  }
-};
-
-/**
- *
- * @param target
- * Given a TargetApp input, return a search query string to append to an appD search call
- * e.g.  '&name=AppName' or '&text=AppTitle'
- */
-const resolveTargetAppToQuery = (target: TargetApp): string => {
-  if (!target) {
-    return '';
-  } else {
-    let query = '';
-    //is there a valid app name?
-    const name = resolveTargetAppToName(target);
-    if (name) {
-      query = `&name=${name}`;
-    } else {
-      const app: AppMetadata = target as AppMetadata;
-      if (app) {
-        //construct a text search, prefering id, then title, then description
-        //this is currently punting on a more complicated heuristic on potentailly ambiguous results (by version, etc)
-        if (app.appId) {
-          query = `&text=${app.appId}`;
-        } else if (app.title) {
-          query = `&text=${app.title}`;
-        } else if (app.description) {
-          query = `&text=${app.description}`;
-        }
-      }
-    }
-    return query;
-  }
-};
 
 const resolveIntent = (message: RuntimeMessage): Promise<IntentResolution> => {
   return new Promise((resolve, reject) => {
@@ -128,12 +75,12 @@ const resolveIntent = (message: RuntimeMessage): Promise<IntentResolution> => {
                 viewId: sView.id,
               });
               const id = (sView && sView.id) || null;
-              const appName: string = sView.directoryData
+              const appName = sView.directoryData
                 ? sView.directoryData.name
                 : 'unknown';
               resolve({
                 source: {
-                  name: appName,
+                  name: appName || '',
                   title: sView.getTitle(),
                   appId: id || '',
                 },
@@ -164,16 +111,22 @@ const buildIntentInstanceTree = (
     const found: Map<string, Array<FDC3App>> = new Map();
     const intents: Array<IntentMetadata> = [];
     data.forEach((item) => {
-      if (item.details.directoryData && item.details.directoryData.intents) {
-        item.details.directoryData.intents.forEach((intent) => {
-          if (!found.has(intent.name)) {
-            intents.push({
-              name: intent.name,
-              displayName: intent.display_name,
+      const listensFor =
+        item.details.directoryData?.interop?.intents?.listensFor;
+      if (listensFor) {
+        const intentKeys = Object.keys(listensFor);
+        intentKeys.forEach((intentName) => {
+          if (!found.has(intentName)) {
+            const intentListeners = listensFor[intentName] as DirectoryIntent[];
+            intentListeners.forEach((listener) => {
+              intents.push({
+                name: intentName,
+                displayName: listener.displayName || intentName,
+              });
+              found.set(intentName, [item]);
             });
-            found.set(intent.name, [item]);
           } else {
-            const intents = found.get(intent.name);
+            const intents = found.get(intentName);
             if (intents) {
               intents.push(item);
             }
@@ -201,7 +154,7 @@ const getAppTitle = (app: FDC3App): string => {
   const directory = app.details.directoryData
     ? app.details.directoryData
     : null;
-  return directory
+  return directory?.title
     ? directory.title
     : view &&
       view.content.webContents &&
@@ -247,7 +200,6 @@ export const raiseIntent = async (message: RuntimeMessage) => {
   const r: Array<FDC3App> = [];
   const intent = message.data?.intent;
 
-  console.log('************** raiseIntent', message);
   if (!intent) {
     throw 'No Intent Provided';
   }
@@ -257,7 +209,11 @@ export const raiseIntent = async (message: RuntimeMessage) => {
     message.data?.target && typeof message.data.target === 'string'
       ? message.data.target
       : undefined;
+
+  //TODO: refactor the runtime method to make 2.0 (and AppIdentifier) compatible.
+  // As well as consistent with getIntentListenersByContext!
   const intentListeners = runtime.getIntentListeners(intent, target);
+  console.log('raise intent.  listeners', intentListeners);
 
   const sourceView = runtime.getView(message.source);
   const sourceName =
@@ -266,7 +222,6 @@ export const raiseIntent = async (message: RuntimeMessage) => {
       : 'unknown';
 
   if (intentListeners) {
-    // let keys = Object.keys(intentListeners);
     intentListeners.forEach((listener) => {
       ///ignore listeners from the view that raised the intent
       if (listener.viewId && listener.viewId !== message.source) {
@@ -296,21 +251,18 @@ export const raiseIntent = async (message: RuntimeMessage) => {
     ctx = message.data.context.type;
   }
 
-  const query =
-    message.data && message.data.target
-      ? resolveTargetAppToQuery(message.data.target)
-      : '';
-
-  const data: Array<DirectoryApp> = (await runtime.fetchFromDirectory(
-    `/apps/search?intent=${intent}&context=${ctx}${query}`,
-  )) as Array<DirectoryApp>;
+  const data = runtime
+    .getDirectory()
+    .retrieveByIntentAndContextType(intent, ctx);
 
   if (data) {
     data.forEach((entry: DirectoryApp) => {
-      r.push({
-        type: 'directory',
-        details: { directoryData: entry },
-      });
+      if (!target || (target && target === entry.name)) {
+        r.push({
+          type: 'directory',
+          details: { directoryData: entry },
+        });
+      }
     });
   }
 
@@ -320,8 +272,11 @@ export const raiseIntent = async (message: RuntimeMessage) => {
       //if it is an existing view, post a message directly to it
       //if it is a directory entry resolve the destination for the intent and launch it
       //dedupe window and directory items
-      if (r[0].type === 'window' && r[0].details && r[0].details.instanceId) {
-        const view = runtime.getView(r[0].details.instanceId);
+      const theApp = r[0];
+      if (theApp.type === 'window') {
+        const view = theApp?.details?.instanceId
+          ? runtime.getView(theApp.details.instanceId)
+          : undefined;
         if (view) {
           if (view.fdc3Version === '1.2') {
             view.content.webContents.send(FDC3_1_2_TOPICS.INTENT, {
@@ -336,49 +291,44 @@ export const raiseIntent = async (message: RuntimeMessage) => {
               source: message.source,
             });
           }
-          //bringing the tab to front conditional on the type of intent
-          if (!utils.isDataIntent(intent)) {
-            /* utils.bringToFront(r[0].details.port); */
-          }
-
           return {
             source: { name: view.directoryData?.name, appId: message.source },
             version: '1.2',
           };
         }
-      } else if (r[0].type === 'directory' && r[0].details.directoryData) {
-        const start_url = r[0].details.directoryData.start_url;
-        const pending = true;
+      } else if (theApp.type === 'directory') {
+        const details = theApp.details?.directoryData
+          ?.details as DirectoryAppLaunchDetails;
+        if (isWeb(details)) {
+          const startUrl: string = details.url || '';
+          const pending = true;
+          if (startUrl) {
+            const workspace = getRuntime().createWorkspace();
 
-        const workspace = getRuntime().createWorkspace();
+            const view = workspace.createView(startUrl, {
+              directoryData: r[0].details.directoryData,
+            });
+            //view.directoryData = r[0].details.directoryData;
+            //set pending intent for the view..
+            if (pending) {
+              view.setPendingIntent(
+                intent,
+                (message.data && message.data.context) || undefined,
+                message.source,
+              );
+            }
 
-        const view = workspace.createView(start_url, {
-          directoryData: r[0].details.directoryData,
-        });
-        //view.directoryData = r[0].details.directoryData;
-        //set pending intent for the view..
-        if (pending) {
-          view.setPendingIntent(
-            intent,
-            (message.data && message.data.context) || undefined,
-            message.source,
-          );
+            return {
+              source: { name: sourceName, appId: message.source },
+              version: '1.2',
+            };
+          }
         }
-
-        return {
-          source: { name: sourceName, appId: message.source },
-          version: '1.2',
-        };
-
-        //send the context - if the default start_url was used...
-        //get the window/tab...
-        // resolve({result:true});
       }
     } else {
       //show resolver UI
       // Send a message to the active tab
       //sort results alphabetically, with directory entries first (before window entries)
-
       r.sort(sortApps);
 
       const eventId = `resolveIntent-${Date.now()}`;
@@ -416,6 +366,16 @@ export const raiseIntentForContext = async (message: RuntimeMessage) => {
     sourceView && sourceView.directoryData
       ? sourceView.directoryData.name
       : 'unknown';
+  /**
+   * filter by target?
+   */
+  const target: TargetApp | undefined =
+    (message.data && message.data.target) || undefined;
+  const name: string | undefined = target
+    ? typeof target === 'string'
+      ? target
+      : (target as AppMetadata).name
+    : '';
 
   const r: Array<FDC3App> = [];
 
@@ -425,60 +385,51 @@ export const raiseIntentForContext = async (message: RuntimeMessage) => {
       : '';
 
   const intentListeners = runtime.getIntentListenersByContext(context);
-
+  console.log('raiseIntentForContext, listeners', context, intentListeners);
   if (intentListeners) {
     // let keys = Object.keys(intentListeners);
     intentListeners.forEach((listeners: Array<View>) => {
       //look up the details of the window and directory metadata in the "connected" store
-      listeners.forEach((view: View) => {
-        //de-dupe
-        if (
-          !r.find((item) => {
-            return (
-              item.details.instanceId && item.details.instanceId === view.id
-            );
-          })
-        ) {
-          const title = view.getTitle();
-          const details: FDC3AppDetail = {
-            instanceId: view.id,
-            title: title,
-            directoryData: view.directoryData,
-          };
-          r.push({ type: 'window', details: details });
-        }
-      });
+      if (listeners) {
+        listeners.forEach((view: View) => {
+          let addView = true;
+          //check for name / target
+          if (name && view.directoryData?.name !== name) {
+            addView = false;
+          }
+          //de-dupe
+          if (
+            r.find((item) => {
+              return (
+                item.details.instanceId && item.details.instanceId === view.id
+              );
+            })
+          ) {
+            addView = false;
+          }
+
+          if (addView) {
+            const title = view.getTitle();
+            const details: FDC3AppDetail = {
+              instanceId: view.id,
+              title: title,
+              directoryData: view.directoryData,
+            };
+            r.push({ type: 'window', details: details });
+          }
+        });
+      }
     });
   }
 
-  /**
-   * To Do: Support additional AppMetadata searching (other than name)
-   */
-  const target: TargetApp | undefined =
-    (message.data && message.data.target) || undefined;
-  const name: string | undefined = target
-    ? typeof target === 'string'
-      ? target
-      : (target as AppMetadata).name
-    : '';
-  const directoryUrl = await utils.getDirectoryUrl();
+  const data = runtime.getDirectory().retrieveByContextType(context);
 
-  const _r = await fetch(
-    `${directoryUrl}/apps/search?context=${context}&name=${name}`,
-  );
-  if (_r) {
-    let data = null;
-    try {
-      data = await _r.json();
-    } catch (err) {
-      console.log('error parsing json', err);
-    }
-
-    if (data) {
-      data.forEach((entry: DirectoryApp) => {
+  if (data) {
+    data.forEach((entry: DirectoryApp) => {
+      if (!name || (name && name === entry.name)) {
         r.push({ type: 'directory', details: { directoryData: entry } });
-      });
-    }
+      }
+    });
   }
 
   if (r.length > 0) {
@@ -487,8 +438,11 @@ export const raiseIntentForContext = async (message: RuntimeMessage) => {
       //if it is a window, post a message directly to it
       //if it is a directory entry resolve the destination for the intent and launch it
       //dedupe window and directory items
-      if (r[0].type === 'window' && r[0].details.instanceId) {
-        const view = runtime.getView(r[0].details.instanceId);
+      const theApp = r[0];
+      if (theApp.type === 'window') {
+        const view = theApp.details?.instanceId
+          ? runtime.getView(theApp.details.instanceId)
+          : undefined;
         if (view) {
           if (view.fdc3Version === '1.2') {
             view.content.webContents.send(FDC3_1_2_TOPICS.INTENT, {
@@ -508,31 +462,35 @@ export const raiseIntentForContext = async (message: RuntimeMessage) => {
         } else {
           throw ResolveError.NoAppsFound;
         }
-      } else if (r[0].type === 'directory' && r[0].details.directoryData) {
-        const start_url = r[0].details.directoryData.start_url;
-        const pending = true;
+      } else if (theApp.type === 'directory') {
+        const details = theApp.details?.directoryData
+          ?.details as DirectoryAppLaunchDetails;
+        if (isWeb(details)) {
+          const startUrl = details.url;
+          const pending = true;
 
-        //let win = window.open(start_url,"_blank");
-        const workspace = getRuntime().createWorkspace();
+          //let win = window.open(start_url,"_blank");
+          const workspace = getRuntime().createWorkspace();
 
-        const view = workspace.createView(start_url, {
-          directoryData: r[0].details.directoryData,
-        });
-        //view.directoryData = r[0].details.directoryData;
-        //set pending intent for the view..
-        const intent = message.data && message.data.intent;
-        if (pending && intent) {
-          view.setPendingIntent(
-            intent,
-            (message.data && message.data.context) || undefined,
-            message.source,
-          );
+          const view = workspace.createView(startUrl, {
+            directoryData: r[0].details.directoryData,
+          });
+          //view.directoryData = r[0].details.directoryData;
+          //set pending intent for the view..
+          const intent = message.data && message.data.intent;
+          if (pending && intent) {
+            view.setPendingIntent(
+              intent,
+              (message.data && message.data.context) || undefined,
+              message.source,
+            );
+          }
+
+          return {
+            source: { name: sourceName, appId: message.source },
+            version: '1.2',
+          };
         }
-
-        return {
-          source: { name: sourceName, appId: message.source },
-          version: '1.2',
-        };
       }
     } else {
       //show resolver UI

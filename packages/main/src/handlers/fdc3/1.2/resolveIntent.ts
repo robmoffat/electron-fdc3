@@ -1,6 +1,10 @@
 import { getRuntime } from '/@/index';
 import { RuntimeMessage } from '/@/handlers/runtimeMessage';
-import { DirectoryApp } from '/@/handlers/fdc3/1.2/types/FDC3Data';
+import {
+  DirectoryApp,
+  isWeb,
+  DirectoryAppLaunchDetails,
+} from '/@/directory/directory';
 import { FDC3_2_0_TOPICS } from '/@/handlers/fdc3/2.0/topics';
 import { FDC3_1_2_TOPICS } from '/@/handlers/fdc3/1.2/topics';
 
@@ -11,21 +15,23 @@ export const resolveIntent = async (message: RuntimeMessage) => {
 
   if (!message.data.selected.instanceId) {
     const data: DirectoryApp = message.data.selected?.directoryData;
+    const details = data.details as DirectoryAppLaunchDetails;
+    if (isWeb(details)) {
+      //launch window
+      const runtime = getRuntime();
+      if (runtime) {
+        const win = runtime.createWorkspace();
+        const view = win.createView(details.url, {
+          directoryData: data as DirectoryApp,
+        });
 
-    //launch window
-    const runtime = getRuntime();
-    if (runtime) {
-      const win = runtime.createWorkspace();
-      const view = win.createView(data.start_url, {
-        directoryData: data as DirectoryApp,
-      });
-
-      //set pending intent and context
-      view.setPendingIntent(
-        message.data.intent,
-        message.data.context,
-        message.data.id,
-      );
+        //set pending intent and context
+        view.setPendingIntent(
+          message.data.intent,
+          message.data.context,
+          message.data.id,
+        );
+      }
     }
   } else {
     const view = runtime.getView(message.data.selected?.instanceId);

@@ -341,6 +341,10 @@ export const createAPI = (): DesktopAgent => {
       context: Context,
       app?: TargetApp,
     ): Promise<IntentResolution> => {
+      //backwards compat: strip off leading 'fdc3' namespace (if present on intent name)
+      if (intent.startsWith('fdc3.')) {
+        intent = intent.substring(5);
+      }
       return await sendMessage(FDC3_1_2_TOPICS.RAISE_INTENT, {
         intent: intent,
         context: context,
@@ -381,6 +385,10 @@ export const createAPI = (): DesktopAgent => {
 
     addIntentListener: (intent: string, listener: ContextHandler): Listener => {
       const listenerId: string = guid();
+      //backwards compat: strip off leading 'fdc3' namespace (if present on intent name)
+      if (intent.startsWith('fdc3.')) {
+        intent = intent.substring(5);
+      }
       if (!_intentListeners.has(intent)) {
         _intentListeners.set(intent, new Map());
       }

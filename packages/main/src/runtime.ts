@@ -270,9 +270,10 @@ export class Runtime {
       if (entry && entry.interop?.intents) {
         //iterate through the intents
         const listensFor = entry.interop?.intents.listensFor ?? {};
+
         Object.keys(listensFor).forEach((intent) => {
-          const entryIntent = listensFor[intent];
-          if (entryIntent.contexts.indexOf(context) > -1) {
+          const entryIntent: any = listensFor[intent];
+          if (entryIntent.contexts?.indexOf(context) > -1) {
             if (!result.has(intent)) {
               result.set(intent, []);
             }

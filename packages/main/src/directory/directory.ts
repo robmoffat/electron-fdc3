@@ -1,3 +1,4 @@
+import { isArray } from 'util';
 import { components } from './generated-schema';
 
 /**
@@ -17,6 +18,12 @@ export type DirectoryAppLaunchDetailsWeb = schemas['WebAppDetails'];
  * If it can't do this for any reason, it returns the empty array.
  */
 export type Loader = (url: string) => Promise<DirectoryApp[]>;
+
+export const isWeb = (
+  details: DirectoryAppLaunchDetails,
+): details is DirectoryAppLaunchDetailsWeb => {
+  return Object.hasOwn(details, 'url');
+};
 
 export class Directory {
   loaders: Loader[];
@@ -89,6 +96,10 @@ export class Directory {
     return this.retrieve((app) => app.name == name);
   }
 
+  retrieveByAppId(appId: string): DirectoryApp[] {
+    return this.retrieve((app) => app.appId == appId);
+  }
+
   retrieveByContextType(contextType: string): DirectoryApp[] {
     return this.retrieve((d) => {
       const listensFor = Object.values(d.interop?.intents?.listensFor ?? {});
@@ -111,16 +122,19 @@ export class Directory {
       }
 
       if (contextType != null) {
-        const theIntents = listensFor[intent] as DirectoryIntent[];
-        const found = theIntents
+        const theIntents: DirectoryIntent[] = listensFor[
+          intent
+        ] as DirectoryIntent[];
+
+        const found = (isArray(theIntents) ? theIntents : [theIntents])
           .map((i) => {
             const cs = i.contexts;
             return cs == null || cs.includes(contextType);
           })
           .reduce((a, b) => a || b);
+
         return found;
       }
-
       return true;
     });
   }

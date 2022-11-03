@@ -315,8 +315,13 @@ export const createAPI = (): DesktopAgent => {
     appArg: unknown,
     contextArg?: Context | undefined,
   ): Promise<AppIdentifier> {
+    let appId = appArg as AppIdentifier;
+    //handle bckward compatiblity
+    if (typeof appArg === 'string') {
+      appId = { appId: appArg };
+    }
     await sendMessage(FDC3_2_0_TOPICS.OPEN, {
-      appIdentifier: appArg as AppIdentifier,
+      appIdentifier: appId,
       context: contextArg,
     });
 
@@ -340,6 +345,10 @@ export const createAPI = (): DesktopAgent => {
     context: Context,
     appIdentity?: unknown,
   ): Promise<IntentResolution> {
+    //backwards compat: strip off leading 'fdc3' namespace (if present on intent name)
+    if (intent.startsWith('fdc3.')) {
+      intent = intent.substring(5);
+    }
     return await sendMessage(FDC3_2_0_TOPICS.RAISE_INTENT, {
       intent: intent,
       context: context,
@@ -439,6 +448,10 @@ export const createAPI = (): DesktopAgent => {
       listener: ContextHandler,
     ): Promise<Listener> => {
       const listenerId: string = guid();
+      //backwards compat: strip off leading 'fdc3' namespace (if present on intent name)
+      if (intent.startsWith('fdc3.')) {
+        intent = intent.substring(5);
+      }
       if (!_intentListeners.has(intent)) {
         _intentListeners.set(intent, new Map());
       }
